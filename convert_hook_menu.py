@@ -11,7 +11,7 @@ def read_drupal_7_hook_menu(path_to_module):
     module_name = os.path.basename(path_to_module)
     with open(os.path.join(path_to_module, f'{module_name}.module')) as f:
         item_start_regex = re.compile(r'\s*\$items\[(?P<quote>[\'"])(?P<path>.+?)(?P=quote)\]\s*=\s*array')
-        kv_one_line_regex = re.compile(r'\s*(?P<quote>[\'"])(?P<key>.+?)(?P=quote)\s*=>\s*(?P<value>.+?)\s*(?P<comma_or_end>,|\);)')
+        kv_one_line_regex = re.compile(r'\s*(?P<quote>[\'"])(?P<key>.+?)(?P=quote)\s*=>\s*(?P<value>.+?)\s*(?P<comma_or_end>,|\);)\s*$')
         kv_one_line_no_comma_regex = re.compile(r'\s*(?P<quote>[\'"])(?P<key>.+?)(?P=quote)\s*=>\s*(?P<value>.+)\s*')
         item_end_regex = re.compile(r'\s*\);')
         hook_menu_end_regex = re.compile(r'\s*return \$items;')
@@ -71,20 +71,35 @@ def read_drupal_7_hook_menu(path_to_module):
 
 
 def write_drupal_8_files(module_name, items, output_dir):
+    path_to_permission_file = os.path.join(output_dir, f'{module_name}.permissions.yml')
+    path_to_routing_file = os.path.join(output_dir, f'{module_name}.routing.yml')
+    path_to_controller_file = os.path.join(output_dir, f'{module_name}.controller.inc')
+    if os.path.exists(path_to_permission_file):
+        raise ValueError(f'File {path_to_permission_file} exists')
+    if os.path.exists(path_to_routing_file):
+        raise ValueError(f'File {path_to_routing_file} exists')
+    if os.path.exists(path_to_controller_file):
+        raise ValueError(f'File {path_to_controller_file} exists')
+
     permissions = {item['access arguments'].strip() for item in items.values() if 'access callback' not in item}
-    with open(os.path.join(output_dir, f'{module_name}.permissions.yml'), 'w') as f:
+    with open(path_to_permission_file, 'w') as f:
         for permission in sorted(permissions):
             f.write(f'{permission}:\n')
             f.write("  title: 'TODO'\n")
             f.write('\n')
 
-    with open(os.path.join(output_dir, f'{module_name}.routing.yml'), 'w') as f_routing, open(os.path.join(output_dir, f'{module_name}.controller.inc'), 'w') as f_controller:
+    with open(path_to_routing_file, 'w') as f_routing, open(path_to_controller_file, 'w') as f_controller:
         files = {item['file'].strip('\'"') for item in items.values() if 'file' in item}
         write_controller_header_to_file(f_controller, module_name, files)
+        page_arguments_regex = re.compile(r'\s*(?P<quote>[\'"])(?P<value>.+?)(?P=quote)\s*,')
         for path, item in items.items():
             page_callback = item['page callback'].strip('\'"')
+            is_form = page_callback == 'drupal_get_form'
+            if is_form:
+                page_arguments_match = page_arguments_regex.search(item['page arguments'])
+                page_callback = page_arguments_match.group('value')
             write_routing_for_item_to_file(f_routing, module_name, path, item, page_callback)
-            if page_callback == 'drupal_get_form':
+            if is_form:
                 print(f'Form {path} needs manual work')
                 write_controller_for_item_to_file(f_controller, module_name, path, item, page_callback, is_form=True)
             else:
@@ -98,15 +113,15 @@ def write_routing_for_item_to_file(f, module_name, path, item, page_callback):
     f.write(f"  path: '/{path_drupal8}'\n")
     f.write('  defaults:\n')
     f.write(rf"    _controller: '\naturwerk\{module_name}\{module_name.capitalize()}Controller::{CONTROLLER_PREFIX}{page_callback}'" + '\n')
-    f.write(f"    _title: {item['title']}\n")
+    title = re.sub(r't\(([^(]+)\)', r'\1', item['title'])
+    f.write(f"    _title: {title}\n")
     f.write('  requirements:\n')
 
     if 'access callback' in item:
-        if item['access callback'] == 'TRUE':
+        if item['access callback'].upper() == 'TRUE':
             f.write("    _access: 'TRUE'\n")
         else:
-            f.write(
-                rf"    _custom_access: '\naturwerk\{module_name}\{module_name.capitalize()}Controller::{ACCESS_PREFIX}{page_callback}'" + '\n')
+            f.write(rf"    _custom_access: '\naturwerk\{module_name}\{module_name.capitalize()}Controller::{ACCESS_PREFIX}{page_callback}'" + '\n')
     elif 'access arguments' in item:
         permission = item['access arguments'].strip().strip('\'"')
         f.write(f"    _permission: '{permission}'\n")
@@ -129,20 +144,13 @@ def write_controller_header_to_file(f, module_name, files):
 
 
 def write_controller_for_item_to_file(f, module_name, path, item, page_callback, is_form=False):
-    # custom_access_functions.append((path,
-    #                                 page_callback,
-    #                                 item['access callback'],
-    #                                 (item['access arguments'] if 'access arguments' in item else None)))
-    # public function showOrganism($organism) {
-    #     return organism_show_organism($organism);
-    # }
     f.write(f"        public function {CONTROLLER_PREFIX}{page_callback}() {{\n")
     if is_form:
         f.write('            // TODO form\n')
     else:
         f.write(f"            return {page_callback}();\n")
     f.write('        }\n')
-    if 'access callback' in item and item['access callback'] != 'TRUE':
+    if 'access callback' in item and item['access callback'].upper() != 'TRUE':
         access_callback = item['access callback'].strip('\'"')
         f.write(f"        public function {ACCESS_PREFIX}{page_callback}() {{\n")
         f.write(f"            return {access_callback}();\n")
@@ -152,10 +160,11 @@ def write_controller_for_item_to_file(f, module_name, path, item, page_callback,
 
 def write_controller_footer_to_file(f):
     f.write('    }\n')
-    f.write('\n')
+    f.write('}\n')
 
 
-module_name, items = read_drupal_7_hook_menu(r'C:\Users\Naturwerk\Documents\GitHub\naturvielfalt_drupal_8_composer\web\modules\custom\observation')
+path_to_module = r'C:\Users\Naturwerk\Documents\GitHub\naturvielfalt_drupal_8_composer\web\modules\custom\actions'
+module_name, items = read_drupal_7_hook_menu(path_to_module)
 
 # for k, v in items.items():
 #     print(k)
@@ -163,4 +172,5 @@ module_name, items = read_drupal_7_hook_menu(r'C:\Users\Naturwerk\Documents\GitH
 #         print(f'{kk}={vv}')
 #     print()
 
-write_drupal_8_files(module_name, items, '.')
+# write_drupal_8_files(module_name, items, '.')
+write_drupal_8_files(module_name, items, path_to_module)
