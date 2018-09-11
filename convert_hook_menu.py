@@ -67,6 +67,10 @@ def read_drupal_7_hook_menu(path_to_module):
                                             else:
                                                 one_line_key_value = (kv_one_line_no_comma_match.group('key'), kv_one_line_no_comma_match.group('value'))
 
+    for path, item in items.items():
+        if 'access callback' not in item and 'access arguments' not in item:
+            item['access callback'] = 'TRUE'
+
     return module_name, items
 
 
@@ -91,19 +95,22 @@ def write_drupal_8_files(module_name, items, output_dir):
     with open(path_to_routing_file, 'w') as f_routing, open(path_to_controller_file, 'w') as f_controller:
         files = {item['file'].strip('\'"') for item in items.values() if 'file' in item}
         write_controller_header_to_file(f_controller, module_name, files)
-        page_arguments_regex = re.compile(r'\s*(?P<quote>[\'"])(?P<value>.+?)(?P=quote)\s*,')
+        page_arguments_regex = re.compile(r'\s*(?P<quote>[\'"])(?P<value>.+?)(?P=quote)')
         for path, item in items.items():
-            page_callback = item['page callback'].strip('\'"')
-            is_form = page_callback == 'drupal_get_form'
-            if is_form:
-                page_arguments_match = page_arguments_regex.search(item['page arguments'])
-                page_callback = page_arguments_match.group('value')
-            write_routing_for_item_to_file(f_routing, module_name, path, item, page_callback)
-            if is_form:
-                print(f'Form {path} needs manual work')
-                write_controller_for_item_to_file(f_controller, module_name, path, item, page_callback, is_form=True)
+            if 'page callback' in item:
+                page_callback = item['page callback'].strip('\'"')
+                is_form = page_callback == 'drupal_get_form'
+                if is_form:
+                    page_arguments_match = page_arguments_regex.search(item['page arguments'])
+                    page_callback = page_arguments_match.group('value')
+                write_routing_for_item_to_file(f_routing, module_name, path, item, page_callback)
+                if is_form:
+                    print(f'Form {path} needs manual work')
+                    write_controller_for_item_to_file(f_controller, module_name, path, item, page_callback, is_form=True)
+                else:
+                    write_controller_for_item_to_file(f_controller, module_name, path, item, page_callback)
             else:
-                write_controller_for_item_to_file(f_controller, module_name, path, item, page_callback)
+                print(f"Skipping item {path} since it doesn't have a page callback")
         write_controller_footer_to_file(f_controller)
 
 
@@ -113,7 +120,7 @@ def write_routing_for_item_to_file(f, module_name, path, item, page_callback):
     f.write(f"  path: '/{path_drupal8}'\n")
     f.write('  defaults:\n')
     f.write(rf"    _controller: '\naturwerk\{module_name}\{module_name.capitalize()}Controller::{CONTROLLER_PREFIX}{page_callback}'" + '\n')
-    title = re.sub(r't\(([^(]+)\)', r'\1', item['title'])
+    title = re.sub(r't\(([^(]+)\)', r'\1', item['title'] if 'title' in item else "'TODO'")
     f.write(f"    _title: {title}\n")
     f.write('  requirements:\n')
 
@@ -163,7 +170,7 @@ def write_controller_footer_to_file(f):
     f.write('}\n')
 
 
-path_to_module = r'C:\Users\Naturwerk\Documents\GitHub\naturvielfalt_drupal_8_composer\web\modules\custom\actions'
+path_to_module = r'C:\Users\Naturwerk\Documents\GitHub\naturvielfalt_drupal_8_composer\web\modules\custom\vote'
 module_name, items = read_drupal_7_hook_menu(path_to_module)
 
 # for k, v in items.items():
